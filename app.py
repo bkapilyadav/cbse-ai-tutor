@@ -1,89 +1,129 @@
 import streamlit as st
-import openai
+import json
 import os
+import uuid
+import openai
+from dotenv import load_dotenv
 
-# Set your OpenAI API key
+# Load environment variables from .env
+load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# App title
-st.set_page_config(page_title="CBSE AI Tutor", page_icon="📚", layout="centered")
-st.title("🤖 CBSE AI Tutor for Class 6 Students")
+# Path to student data
+DATA_PATH = "students.json"
 
-# Initialize session state
-if "student" not in st.session_state:
-    st.session_state.student = {}
-if "current_chapter" not in st.session_state:
-    st.session_state.current_chapter = 1
-if "subject" not in st.session_state:
-    st.session_state.subject = "Science"
-if "chapter_data" not in st.session_state:
-    st.session_state.chapter_data = None
+# Load or initialize student data
+def load_data():
+    if not os.path.exists(DATA_PATH):
+        with open(DATA_PATH, "w") as f:
+            json.dump({}, f)
+    with open(DATA_PATH, "r") as f:
+        return json.load(f)
 
-# Subject and class input
-with st.sidebar:
-    st.header("📋 Student Details")
-    student_name = st.text_input("Student Name", value="Shaurya")
-    student_class = st.selectbox("Class", ["6"])
-    subject = st.selectbox("Subject", ["Science", "Maths", "English"])
+# Save student data
+def save_data(data):
+    with open(DATA_PATH, "w") as f:
+        json.dump(data, f, indent=4)
 
-    if st.button("Start Learning"):
-        st.session_state.student = {"name": student_name, "class": student_class}
-        st.session_state.subject = subject
-        st.session_state.current_chapter = 1
-        st.session_state.chapter_data = None
-        st.experimental_rerun()
-
-# OpenAI helper function
-def get_openai_response(prompt):
-    response = openai.chat.completions.create(
+# Generate chapters using OpenAI
+def generate_chapters(subject, grade):
+    prompt = (
+        f"Generate a list of chapters for Class {grade} {subject} based on CBSE syllabus. "
+        "Return JSON with 'Chapter' and 'Title'."
+    )
+    response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content.strip()
+    return json.loads(response["choices"][0]["message"]["content"].strip())
 
-# Generate chapter content
-@st.cache_data(show_spinner=False)
-def generate_chapter_content(subject, student_class, chapter_number):
-    prompt = f"""
-    Act like a kind, friendly CBSE tutor for a class {student_class} student. 
-    Teach Chapter {chapter_number} of {subject} in a clear and engaging way, using simple language.
+# Generate lesson content
+def generate_lesson(subject, chapter):
+    prompt = (
+        f"You're a friendly CBSE tutor. Write a student-friendly explanation for Class 6 {subject} - Chapter: {chapter['Title']}. "
+        f"Make it engaging for 10-12 year olds."
+    )
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response["choices"][0]["message"]["content"].strip()
 
-    1. Start with an emoji-rich title like '📖 Chapter 1: Food: Where Does It Come From'
-    2. Explain the chapter content in a storytelling, friendly tone (400-500 words).
-    3. Follow it up with a section titled '🧠 Quiz Time!' with 3 multiple-choice questions (3 options each).
-    4. End the content with a friendly encouragement to proceed to the next chapter.
+# Generate quiz questions
+def generate_quiz(subject, chapter):
+    prompt = (
+        f"Create 3 multiple choice quiz questions (with 3 options each and correct answer) for CBSE Class 6 {subject}, Chapter: {chapter['Title']}."
+    )
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response["choices"][0]["message"]["content"].strip()
 
-    Format the output with spacing for readability.
-    """
-    return get_openai_response(prompt)
+# Main app logic
+st.set_page_config(page_title="CBSE AI Tutor", page_icon="📖")
+st.title("📖 CBSE Interactive AI Tutor")
 
-# Display chapter content
-if st.session_state.student:
-    student = st.session_state.student
-    st.subheader(f"👋 Welcome, {student['name']} (Class {student['class']})")
-    st.markdown(f"### 📘 Subject: {st.session_state.subject}")
+students = load_data()
 
-    chapter_number = st.session_state.current_chapter
+if "student_id" not in st.session_state:
+    with st.form("student_form"):
+        name = st.text_input("Enter your name")
+        student_class = st.selectbox("Select your class", ["6", "7", "8"])
+        subject = st.selectbox("Choose a subject", ["Science", "Maths", "English"])
+        submitted = st.form_submit_button("Start Learning")
 
-    if st.session_state.chapter_data is None:
-        with st.spinner("Fetching your personalized lesson..."):
-            content = generate_chapter_content(st.session_state.subject, student["class"], chapter_number)
-            st.session_state.chapter_data = content
-
-    # Display the generated content
-    st.markdown(st.session_state.chapter_data)
-
-    # Buttons for navigation
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("✅ Mark Chapter as Complete"):
-            st.success(f"Chapter {chapter_number} marked as complete! 🎉")
-
-    with col2:
-        if st.button("➡️ Go to Next Chapter"):
-            st.session_state.current_chapter += 1
-            st.session_state.chapter_data = None
-            st.experimental_rerun()
-
+        if submitted:
+            student_id = str(uuid.uuid4())
+            st.session_state.student_id = student_id
+            st.session_state.subject = subject
+            st.session_state.student_class = student_class
+            students[student_id] = {
+                "id": student_id,
+                "name": name,
+                "class": student_class,
+                "subject": subject,
+                "progress": 0
+            }
+            save_data(students)
+            st.rerun()
 else:
-    st.info("Please fill in the student details and click 'Start Learning' to begin your AI tutoring journey.")
+    student_id = st.session_state.student_id
+    student = students[student_id]
+    student_class = st.session_state.student_class
+    subject = st.session_state.subject
+
+    st.success(f"Welcome, {student['name']} 👋")
+
+    if "chapters" not in st.session_state:
+        st.session_state.chapters = generate_chapters(subject, student_class)
+
+    chapters = st.session_state.chapters
+    current_index = student["progress"]
+
+    if current_index >= len(chapters):
+        st.balloons()
+        st.success("You've completed all chapters! Great job!")
+    else:
+        chapter = chapters[current_index]
+        st.header(f"📖 Chapter {chapter['Chapter']}: {chapter['Title']}")
+
+        if "lesson" not in st.session_state:
+            st.session_state.lesson = generate_lesson(subject, chapter)
+
+        st.write(st.session_state.lesson)
+
+        st.subheader("🎮 Quiz Time!")
+        if "quiz" not in st.session_state:
+            st.session_state.quiz = generate_quiz(subject, chapter)
+
+        st.write(st.session_state.quiz)
+
+        if st.button("✅ Mark Chapter as Completed"):
+            student["progress"] += 1
+            students[student_id] = student
+            save_data(students)
+            for key in ["lesson", "quiz"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
