@@ -3,7 +3,7 @@ import openai
 import json
 import os
 
-# Set your OpenAI API Key from Streamlit secrets
+# OpenAI API Key (set via Streamlit secrets)
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 DATA_FILE = "students.json"
@@ -20,35 +20,35 @@ def save_data(data):
 
 def generate_chapters(subject, student_class):
     prompt = f"List 5 important chapters from Class {student_class} CBSE {subject} syllabus."
-    response = openai.ChatCompletion.create(
+    response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    chapters = response['choices'][0]['message']['content'].split("\n")
+    chapters_text = response.choices[0].message.content
+    chapters = chapters_text.split("\n")
     return [chap.strip("1234567890. ") for chap in chapters if chap.strip()]
 
 def generate_lesson(subject, chapter, student_class):
     prompt = f"Explain the chapter '{chapter}' from Class {student_class} CBSE {subject} in a simple and engaging way for a 12-year-old."
-    response = openai.ChatCompletion.create(
+    response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response['choices'][0]['message']['content']
+    return response.choices[0].message.content
 
 def generate_quiz(subject, chapter, student_class):
     prompt = f"Create 3 simple quiz questions with answers based on Class {student_class} CBSE {subject} chapter '{chapter}'. Format: Q, then A."
-    response = openai.ChatCompletion.create(
+    response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response['choices'][0]['message']['content']
+    return response.choices[0].message.content
 
 st.title("📚 CBSE AI Teaching Assistant")
 st.markdown("Welcome! I’m your AI Tutor. Let’s start your learning journey! 🎓")
 
 students = load_data()
 
-# Initialize student variable here to avoid NameError
 student = None
 
 with st.form("student_info"):
@@ -59,14 +59,13 @@ with st.form("student_info"):
     submitted = st.form_submit_button("Start Learning")
 
 if submitted and student_id:
-    # Load or create student progress
     student = students.get(student_id, {
         "name": student_name,
         "class": student_class,
         "subject": subject,
         "progress": {}
     })
-    
+
     st.success(f"Welcome, {student_name} 👋")
 
     if subject not in student["progress"]:
@@ -105,7 +104,6 @@ if submitted and student_id:
                 students[student_id] = student
                 save_data(students)
 
-# Save data if student was loaded or created
 if student is not None and student_id:
     students[student_id] = student
     save_data(students)
