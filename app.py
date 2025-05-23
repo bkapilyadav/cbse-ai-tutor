@@ -1,34 +1,48 @@
 import streamlit as st
-import re
 import json
 from openai import OpenAI
 
 # Initialize OpenAI client
 client = OpenAI()
 
-def clean_json_response(raw_text: str) -> str:
+# Helper function to clean JSON from API responses with extra text
+def extract_json_array(text: str) -> str:
     """
-    Remove markdown-style triple backticks and optional 'json' tag from API response.
+    Extract JSON array substring from a larger string that may contain extra text before/after.
+    Returns the substring that starts with [ and ends with the matching ].
     """
-    cleaned = re.sub(r"```(?:json)?\n(.*)```", r"\1", raw_text, flags=re.DOTALL).strip()
-    return cleaned
+    start = text.find('[')
+    if start == -1:
+        return ""
+    count = 0
+    for i in range(start, len(text)):
+        if text[i] == '[':
+            count += 1
+        elif text[i] == ']':
+            count -= 1
+            if count == 0:
+                return text[start:i+1]
+    return ""
 
+def clean_json_response(text: str) -> str:
+    # You can add further cleaning if needed
+    return text.strip()
+
+# Fetch chapters for the selected subject and class
 def get_chapters(subject: str, student_class: str):
     prompt = (
-        f"List the chapters for {subject} for class {student_class} as a JSON array of objects,"
-        f" each object with keys 'chapter' and 'title', like:\n"
-        f"[{{\"chapter\": \"1\", \"title\": \"Chapter Title\"}}, ...]\n"
-        f"Only return the JSON array, no extra text."
+        f"Provide a JSON array of chapters with 'chapter' and 'title' fields for {subject} class {student_class} "
+        f"in this format: "
+        f"[{{\"chapter\": \"1\", \"title\": \"Chapter Title 1\"}}, {{\"chapter\": \"2\", \"title\": \"Chapter Title 2\"}}, ...]"
     )
-
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that provides educational chapters."},
+            {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ],
         temperature=0,
-        max_tokens=500,
+        max_tokens=700,
     )
 
     raw_text = response.choices[0].message.content
@@ -36,36 +50,36 @@ def get_chapters(subject: str, student_class: str):
 
     try:
         chapters = json.loads(cleaned_text)
-    except Exception:
+        if not isinstance(chapters, list):
+            raise ValueError("Chapters response is not a list")
+        return chapters
+    except Exception as e:
         st.error("Failed to parse chapters response from API.")
-        st.error(f"API response was:\n{raw_text}")
-        chapters = []
+        st.error(f"API response: ```json\n{cleaned_text}\n```")
+        return []
 
-    return chapters
-
-def get_chapter_content(subject: str, student_class: str, chapter_number: str):
+# Fetch chapter content summary
+def get_chapter_summary(subject: str, student_class: str, chapter_number: str):
     prompt = (
-        f"Write a simple, engaging explanation of Chapter {chapter_number} of {subject} for class {student_class}."
-        f" Use easy language suitable for kids."
+        f"Give a short, kid-friendly summary of Chapter {chapter_number} for {subject} class {student_class}."
     )
-
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are a helpful teacher bot."},
+            {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.7,
         max_tokens=700,
     )
-
     return response.choices[0].message.content.strip()
 
+# Fetch quiz questions for a chapter
 def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     prompt = (
         f"Generate 3 simple multiple choice questions (question + 3 options + correct answer) "
-        f"based on Chapter {chapter_number} of {subject} for class {student_class}."
-        f" Return as a JSON array of objects with keys: question, options (list), answer."
+        f"based on Chapter {chapter_number} of {subject} for class {student_class}. "
+        f"Return ONLY a JSON array of objects with keys: question, options (list), answer."
     )
 
     response = client.chat.completions.create(
@@ -81,128 +95,110 @@ def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     raw_text = response.choices[0].message.content
     cleaned_text = clean_json_response(raw_text)
 
-    try:
-        quiz = json.loads(cleaned_text)
-    except Exception:
-        st.error("Failed to parse quiz questions from API.")
+    json_array_str = extract_json_array(cleaned_text)
+    if not json_array_str:
+        st.error("Failed to extract JSON array from quiz response.")
         st.error(f"API response was:\n{raw_text}")
-        quiz = []
+        return []
+
+    try:
+        quiz = json.loads(json_array_str)
+    except Exception as e:
+        st.error(f"Failed to parse quiz JSON: {e}")
+        st.error(f"JSON snippet:\n{json_array_str}")
+        return []
 
     return quiz
 
 def main():
     st.title("📘 CBSE AI Tutor")
 
-    # Input student details
-    if "student" not in st.session_state:
-        st.session_state.student = {}
+    # Input fields for student data
+    student_id = st.text_input("Enter Student ID:")
+    student_name = st.text_input("Enter Student Name:")
+    student_class = st.text_input("Enter Class (e.g., 6):")
+    subject = st.selectbox(
+        "Select Subject:",
+        options=[
+            "Mathematics", "Science", "Social Science", "English", "Hindi",
+            "Sanskrit", "Computer Science", "Environmental Science"
+        ],
+        help="Scroll to select your subject."
+    )
 
-    with st.form("student_info_form"):
-        st.session_state.student['name'] = st.text_input("Enter your name", st.session_state.student.get('name', ''))
-        st.session_state.student['id'] = st.text_input("Enter your ID", st.session_state.student.get('id', ''))
-        st.session_state.student['class'] = st.text_input("Enter your class (e.g., 6)", st.session_state.student.get('class', ''))
-        
-        # Scrollable subject selectbox
-        subjects = [
-            "Science", "Mathematics", "English", "Social Science",
-            "Computer Science", "Hindi", "Sanskrit", "Environmental Studies"
-        ]
-        st.session_state.student['subject'] = st.selectbox("Select subject", subjects, index=subjects.index(st.session_state.student.get('subject', "Science")) if st.session_state.student.get('subject') in subjects else 0)
-        
-        submitted = st.form_submit_button("Submit")
-        if submitted:
-            if not all([st.session_state.student['name'], st.session_state.student['id'], st.session_state.student['class'], st.session_state.student['subject']]):
-                st.warning("Please fill all the details.")
-                return
-            # Reset chapter progress on new submission
-            st.session_state.current_chapter_idx = 0
-            st.session_state.completed_chapters = set()
-            st.success("Student details saved! You can now explore chapters below.")
+    if not (student_id and student_name and student_class and subject):
+        st.info("Please fill in all student details and select subject.")
+        return
 
-    if "current_chapter_idx" not in st.session_state:
-        st.session_state.current_chapter_idx = 0
+    if "chapters" not in st.session_state:
+        st.session_state.chapters = []
+    if "current_chapter_index" not in st.session_state:
+        st.session_state.current_chapter_index = 0
     if "completed_chapters" not in st.session_state:
         st.session_state.completed_chapters = set()
+    if "quiz" not in st.session_state:
+        st.session_state.quiz = []
 
-    if all([st.session_state.student.get('name'), st.session_state.student.get('id'),
-            st.session_state.student.get('class'), st.session_state.student.get('subject')]):
+    # Load chapters once per subject + class
+    if not st.session_state.chapters:
+        chapters = get_chapters(subject, student_class)
+        if chapters:
+            st.session_state.chapters = chapters
+        else:
+            st.warning("No chapters found for your selection. Please check inputs.")
+            return
 
-        # Fetch chapters once and store in session state
-        if "chapters" not in st.session_state:
-            chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
-            if chapters:
-                st.session_state.chapters = chapters
+    chapters = st.session_state.chapters
+    current_idx = st.session_state.current_chapter_index
+
+    st.subheader(f"Chapters for {subject} - Class {student_class}:")
+    chapter_titles = [f"Chapter {ch['chapter']}: {ch['title']}" for ch in chapters]
+    st.write(", ".join(chapter_titles))
+
+    current_chapter = chapters[current_idx]
+
+    st.markdown(f"### 📖 Chapter {current_chapter['chapter']}: {current_chapter['title']}")
+
+    # Show chapter summary
+    if "chapter_summary" not in st.session_state:
+        st.session_state.chapter_summary = get_chapter_summary(subject, student_class, current_chapter['chapter'])
+
+    st.markdown(st.session_state.chapter_summary)
+
+    # Show quiz for the chapter
+    if not st.session_state.quiz:
+        st.session_state.quiz = get_quiz_questions(subject, student_class, current_chapter['chapter'])
+
+    if st.session_state.quiz:
+        st.markdown("### 📝 Quiz Questions")
+        for i, q in enumerate(st.session_state.quiz, start=1):
+            st.markdown(f"**Q{i}: {q['question']}**")
+            options = q.get("options", [])
+            for opt in options:
+                st.markdown(f"- {opt}")
+
+    # Buttons for user actions
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Mark Chapter Completed"):
+            st.session_state.completed_chapters.add(current_chapter['chapter'])
+            st.success(f"Chapter {current_chapter['chapter']} marked as completed!")
+
+    with col2:
+        if st.button("Next Chapter"):
+            if current_idx + 1 < len(chapters):
+                st.session_state.current_chapter_index += 1
+                # Reset cached data for next chapter
+                st.session_state.chapter_summary = None
+                st.session_state.quiz = []
+                st.experimental_rerun()
             else:
-                st.warning("No chapters found for your selection.")
-                return
-        else:
-            chapters = st.session_state.chapters
+                st.info("You have completed all chapters!")
 
-        total_chapters = len(chapters)
-
-        # Display all chapters as clickable buttons
-        st.markdown(f"### Chapters for {st.session_state.student['subject']} - Class {st.session_state.student['class']}:")
-        for idx, chap in enumerate(chapters):
-            chap_num = chap.get("chapter")
-            chap_title = chap.get("title")
-            if idx == st.session_state.current_chapter_idx:
-                st.markdown(f"**📖 Chapter {chap_num}: {chap_title}**")
-            else:
-                if st.button(f"Go to Chapter {chap_num}: {chap_title}", key=f"chap_{idx}"):
-                    st.session_state.current_chapter_idx = idx
-
-        # Current chapter details
-        current_chap = chapters[st.session_state.current_chapter_idx]
-        st.markdown(f"## 📖 Chapter {current_chap['chapter']}: {current_chap['title']}")
-
-        # Get chapter content
-        if f"chapter_content_{st.session_state.current_chapter_idx}" not in st.session_state:
-            content = get_chapter_content(
-                st.session_state.student['subject'],
-                st.session_state.student['class'],
-                current_chap['chapter']
-            )
-            st.session_state[f"chapter_content_{st.session_state.current_chapter_idx}"] = content
-        else:
-            content = st.session_state[f"chapter_content_{st.session_state.current_chapter_idx}"]
-
-        st.markdown(content)
-
-        # Quiz section
-        if f"quiz_{st.session_state.current_chapter_idx}" not in st.session_state:
-            quiz = get_quiz_questions(
-                st.session_state.student['subject'],
-                st.session_state.student['class'],
-                current_chap['chapter']
-            )
-            st.session_state[f"quiz_{st.session_state.current_chapter_idx}"] = quiz
-        else:
-            quiz = st.session_state[f"quiz_{st.session_state.current_chapter_idx}"]
-
-        if quiz:
-            st.markdown("### Quiz Time! 🎉")
-            for i, q in enumerate(quiz):
-                st.markdown(f"**Q{i+1}: {q['question']}**")
-                options = q['options']
-                user_answer = st.radio(f"Choose the correct answer for Q{i+1}:", options, key=f"quiz_{st.session_state.current_chapter_idx}_{i}")
-                if st.button(f"Check Answer for Q{i+1}", key=f"check_{st.session_state.current_chapter_idx}_{i}"):
-                    if user_answer == q['answer']:
-                        st.success("Correct! 🎉")
-                    else:
-                        st.error(f"Incorrect. The correct answer is: {q['answer']}")
-
-        # Mark chapter completed button
-        if current_chap['chapter'] not in st.session_state.completed_chapters:
-            if st.button("Mark Chapter Completed ✅"):
-                st.session_state.completed_chapters.add(current_chap['chapter'])
-                st.success(f"Chapter {current_chap['chapter']} marked as completed!")
-
-        # Next chapter button
-        if st.session_state.current_chapter_idx < total_chapters - 1:
-            if st.button("Next Chapter ▶️"):
-                st.session_state.current_chapter_idx += 1
-        else:
-            st.info("You have completed all chapters!")
+    # Show completed chapters
+    if st.session_state.completed_chapters:
+        completed_list = ", ".join(sorted(st.session_state.completed_chapters))
+        st.markdown(f"✅ Completed Chapters: {completed_list}")
 
 if __name__ == "__main__":
     main()
