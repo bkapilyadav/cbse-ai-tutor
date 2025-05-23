@@ -8,20 +8,20 @@ from openai import OpenAI
 client = OpenAI()
 
 def clean_json_response(raw_text: str) -> str:
-    match = re.search(r'\[\s*{.*?}\s*\]', raw_text, re.DOTALL)
+    # Improved regex to extract first JSON array in text robustly
+    match = re.search(r'\[\s*\{.*?\}\s*\]', raw_text, re.DOTALL)
     return match.group(0).strip() if match else raw_text.strip()
 
 def get_chapters(subject: str, student_class: str):
     prompt = (
         f"List the chapters for {subject} for class {student_class} as a JSON array of objects, "
-        f"each object with keys 'chapter' and 'title', like:\n"
-        f"[{{\"chapter\": \"1\", \"title\": \"Chapter Title\"}}, ...]\n"
-        f"Only return the JSON array, no extra text."
+        f"each object with keys 'chapter' and 'title'. The title should be the exact chapter title as per CBSE syllabus. "
+        f"Only return the JSON array, no explanations or extra text."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that provides educational chapters."},
+            {"role": "system", "content": "You are an educational assistant providing precise CBSE syllabus chapter data."},
             {"role": "user", "content": prompt},
         ],
         temperature=0,
@@ -30,21 +30,23 @@ def get_chapters(subject: str, student_class: str):
     raw_text = response.choices[0].message.content
     cleaned_text = clean_json_response(raw_text)
     try:
-        return json.loads(cleaned_text)
+        chapters = json.loads(cleaned_text)
+        return chapters
     except Exception:
-        st.error("Failed to parse chapters response from API.")
+        st.error("Failed to parse chapters from API.")
         st.error(f"API response was:\n{raw_text}")
         return []
 
-def get_chapter_content(subject: str, student_class: str, chapter_number: str):
+def get_chapter_content(subject: str, student_class: str, chapter_number: str, chapter_title: str):
     prompt = (
-        f"Write a simple, engaging explanation of Chapter {chapter_number} of {subject} for class {student_class}. "
-        f"Use easy language suitable for kids."
+        f"Write a simple and engaging explanation in Hindi of Chapter {chapter_number} titled '{chapter_title}' "
+        f"from {subject} for class {student_class}. "
+        f"Use easy language suitable for kids and ensure content strictly matches the chapter title and topic."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are a helpful teacher bot."},
+            {"role": "system", "content": "You are a helpful Hindi teacher bot."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.7,
@@ -54,55 +56,51 @@ def get_chapter_content(subject: str, student_class: str, chapter_number: str):
 
 def validate_quiz_questions(quiz, chapter_number, subject, chapter_title):
     """
-    Validate if quiz questions relate to the chapter number, subject or chapter title keywords.
-    Returns True if all questions seem relevant, else False.
+    Validate that each quiz question relates to chapter number or chapter title keywords (Hindi and English).
+    Returns True if all questions pass, else False.
     """
     chapter_str = str(chapter_number)
     subject_lower = subject.lower()
-    chapter_title_words = set(chapter_title.lower().split())
+    chapter_title_words = set(chapter_title.lower().replace("(", "").replace(")", "").split())
 
     for q in quiz:
         question_text = q.get("question", "").lower()
-        # Relaxed check: pass if question contains either chapter number, subject name, or words from chapter title
-        if (chapter_str not in question_text and
-            subject_lower not in question_text and
-            not any(word in question_text for word in chapter_title_words)):
-            # If question does not mention chapter number, subject, or chapter title keywords, fail validation
+        # Check if question mentions chapter number, subject name or any chapter title word (relaxed but contextual)
+        if not (chapter_str in question_text
+                or subject_lower in question_text
+                or any(word in question_text for word in chapter_title_words)):
             return False
     return True
 
-def get_quiz_questions(subject: str, student_class: str, chapter_number: str, chapter_title: str):
+def get_quiz_questions(subject: str, student_class: str, chapter_number: str, chapter_title: str, retries=2):
     prompt = (
-        f"Generate 3 simple multiple choice questions (question + 3 options + correct answer) "
-        f"STRICTLY based on the content of Chapter {chapter_number} of {subject} for class {student_class}. "
-        f"Do NOT include any questions outside this chapter. "
-        f"Each question must be directly relevant to Chapter {chapter_number} content. "
-        f"Return the questions as a JSON array of objects with keys: question, options (list), answer. "
-        f"Make the questions kid-friendly and clear. "
-        f"Only return the JSON array, no extra text."
+        f"Generate 3 simple multiple choice questions (each with question text, 3 options, and the correct answer) "
+        f"STRICTLY based on Chapter {chapter_number} titled '{chapter_title}' from {subject} for class {student_class}. "
+        f"Questions must be kid-friendly, clear, and directly relevant to this chapter only. "
+        f"Return ONLY the JSON array of objects with keys: question, options (list), answer."
     )
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a quiz generator for kids."},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.7,
-        max_tokens=700,
-    )
-    raw_text = response.choices[0].message.content
-    cleaned_text = clean_json_response(raw_text)
-    try:
-        quiz = json.loads(cleaned_text)
-        # Validate quiz questions using relaxed logic
-        if not validate_quiz_questions(quiz, chapter_number, subject, chapter_title):
-            st.error("Quiz questions validation failed: questions might not be strictly related to the chapter.")
-            return []
-        return quiz
-    except Exception:
-        st.error("Failed to parse quiz questions from API.")
-        st.error(f"API response was:\n{raw_text}")
-        return []
+    for attempt in range(retries):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a quiz generator for kids with strict adherence to chapter topics."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=700,
+        )
+        raw_text = response.choices[0].message.content
+        cleaned_text = clean_json_response(raw_text)
+        try:
+            quiz = json.loads(cleaned_text)
+            if validate_quiz_questions(quiz, chapter_number, subject, chapter_title):
+                return quiz
+            else:
+                st.warning("Quiz questions validation failed, retrying to generate relevant questions...")
+        except Exception:
+            st.warning("Failed to parse quiz questions, retrying...")
+    st.error("Could not generate valid quiz questions related to the chapter after retries.")
+    return []
 
 def main():
     st.title("📘 CBSE AI Tutor")
@@ -138,6 +136,7 @@ def main():
             st.session_state.chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
 
     if all(st.session_state.student.get(k) for k in ['name', 'id', 'class', 'subject']):
+        # Refresh chapters if subject/class changed
         if (
             "previous_subject" not in st.session_state or
             "previous_class" not in st.session_state or
@@ -149,6 +148,7 @@ def main():
             st.session_state.previous_class = st.session_state.student['class']
             st.session_state.current_chapter_idx = 0
             st.session_state.completed_chapters = set()
+            # Clear cached content and quizzes
             for k in list(st.session_state.keys()):
                 if k.startswith("chapter_content_") or k.startswith("quiz_"):
                     del st.session_state[k]
@@ -178,7 +178,8 @@ def main():
             st.session_state[key_content] = get_chapter_content(
                 st.session_state.student['subject'],
                 st.session_state.student['class'],
-                current_chap['chapter']
+                current_chap['chapter'],
+                current_chap['title']
             )
         st.markdown(st.session_state[key_content])
 
