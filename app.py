@@ -108,13 +108,11 @@ def main():
             st.session_state.current_chapter_idx = 0
             st.session_state.completed_chapters = set()
 
-            # Store previous subject/class to detect changes
             st.session_state.previous_subject = st.session_state.student['subject']
             st.session_state.previous_class = st.session_state.student['class']
             st.session_state.chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
 
     if all(st.session_state.student.get(k) for k in ['name', 'id', 'class', 'subject']):
-        # Refresh chapters if subject/class changed after initial form submission
         if (
             "previous_subject" not in st.session_state or
             "previous_class" not in st.session_state or
