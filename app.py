@@ -4,112 +4,106 @@ import json
 import os
 import re
 
-# Set your OpenAI API key securely as environment variable or Streamlit secrets
+# ✅ Load API key
 openai.api_key = os.getenv("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
 
+# ✅ File to save student data
 DATA_FILE = "students_data.json"
 
+# ✅ Load or initialize student data
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             try:
                 return json.load(f)
-            except json.JSONDecodeError:
+            except:
                 return {}
     return {}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+        json.dump(data, f, indent=2)
 
-def generate_lessons(subject, student_class):
+# ✅ Generate list of chapters
+def generate_chapters(subject, student_class):
     prompt = f"""
-You are an expert CBSE tutor teaching Class {student_class} students in {subject}.
-List 3 important chapters with brief titles.
-Format as JSON array of chapter titles.
-"""
+List 5 chapters for CBSE Class {student_class} in {subject} with only title text. 
+Format response as a plain numbered list like:
+1. Chapter One Title
+2. Chapter Two Title
+    """
     response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    chapters_text = response.choices[0].message.content
-    try:
-        chapters = json.loads(chapters_text)
-    except:
-        # fallback parsing if not valid json
-        chapters = re.findall(r'"(.*?)"', chapters_text)
+    lines = response.choices[0].message.content.strip().split("\n")
+    chapters = [re.sub(r'^\d+[\).]\s*', '', line).strip() for line in lines if line.strip()]
     return chapters
 
-def generate_lesson_content(subject, chapter, student_class):
+# ✅ Generate lesson content
+def generate_lesson(subject, chapter, student_class):
     prompt = f"""
-You are an expert CBSE tutor teaching Class {student_class} students in {subject}.
-Explain the chapter '{chapter}' in an easy, interactive way with examples suitable for kids.
-Limit to about 300 words.
-"""
+You are a friendly AI tutor for CBSE Class {student_class}. Explain the chapter "{chapter}" from {subject} in a simple and fun way suitable for students. Use short paragraphs and examples. Keep it under 300 words.
+    """
     response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content
+    return response.choices[0].message.content.strip()
 
+# ✅ Generate multiple choice quiz
 def generate_quiz(subject, chapter, student_class):
     prompt = f"""
-Create 3 multiple choice quiz questions for Class {student_class} CBSE {subject} chapter '{chapter}'.
-Format each question as:
-Q: question text
+Create 3 multiple choice questions for CBSE Class {student_class} chapter "{chapter}" in {subject}. 
+Each should follow this format:
+Q: question
 Options:
 a) option1
 b) option2
 c) option3
 Answer: a
-"""
+    """
     response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content
+    return response.choices[0].message.content.strip()
 
+# ✅ Parse quiz into structure
 def parse_quiz(quiz_text):
-    # regex to parse quiz formatted as specified
     pattern = re.compile(
-        r"Q:\s*(.+?)\s*Options:\s*a\)\s*(.+?)\s*b\)\s*(.+?)\s*c\)\s*(.+?)\s*Answer:\s*([abc])",
+        r"Q:\s*(.*?)\s*Options:\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*Answer:\s*([abc])",
         re.DOTALL
     )
     questions = []
     for match in pattern.finditer(quiz_text):
-        question = match.group(1).strip()
-        options = {
-            "a": match.group(2).strip(),
-            "b": match.group(3).strip(),
-            "c": match.group(4).strip(),
-        }
-        answer = match.group(5).strip()
         questions.append({
-            "question": question,
-            "options": options,
-            "answer": answer
+            "question": match.group(1).strip(),
+            "options": {
+                "a": match.group(2).strip(),
+                "b": match.group(3).strip(),
+                "c": match.group(4).strip(),
+            },
+            "answer": match.group(5).strip()
         })
     return questions
 
-# Load student progress data
+# ✅ Streamlit app UI starts here
 students = load_data()
+st.title("📚 CBSE AI Tutor")
 
-st.title("🧑‍🏫 CBSE AI Tutor - Interactive Learning")
-
-# Student info input
 with st.form("student_form"):
-    name = st.text_input("Enter your Name")
-    student_id = st.text_input("Enter your Student ID")
-    student_class = st.selectbox("Select Class", options=["6", "7", "8", "9", "10"])
-    subject = st.selectbox("Select Subject", options=["Science", "Mathematics", "English"])
+    name = st.text_input("Student Name")
+    student_id = st.text_input("Student ID")
+    student_class = st.selectbox("Class", ["6", "7", "8", "9", "10"])
+    subject = st.selectbox("Subject", ["Science", "Mathematics", "English", "Social Science"])
     submitted = st.form_submit_button("Start Learning")
 
 if submitted:
-    if not (name and student_id):
-        st.error("Please enter both Name and Student ID.")
+    if not name or not student_id:
+        st.error("Please enter both name and student ID")
         st.stop()
 
-    # Load or initialize student data
     if student_id not in students:
         students[student_id] = {
             "name": name,
@@ -118,87 +112,68 @@ if submitted:
             "progress": {
                 "chapter_index": 0,
                 "lesson_done": False,
-                "quiz_done": False,
-                "quiz_score": 0
+                "quiz_done": False
             }
         }
-    else:
-        # Update subject/class if changed
-        students[student_id]["class"] = student_class
-        students[student_id]["subject"] = subject
-        students[student_id]["name"] = name
+        students[student_id]["chapters"] = generate_chapters(subject, student_class)
+        save_data(students)
 
     student = students[student_id]
-    st.success(f"Welcome, {student['name']} 👋")
-    
-    # Generate chapters for selected subject/class
-    if "chapters" not in student:
-        chapters = generate_lessons(subject, student_class)
-        student["chapters"] = chapters
-        save_data(students)
-    else:
-        chapters = student["chapters"]
+    chapters = student["chapters"]
+    progress = student["progress"]
+    chapter_index = progress["chapter_index"]
 
-    chapter_index = student["progress"]["chapter_index"]
     if chapter_index >= len(chapters):
-        st.success("🎉 You have completed all chapters available for this subject!")
+        st.success("🎉 You've completed all chapters!")
         st.stop()
 
-    current_chapter = chapters[chapter_index]
-    st.header(f"📘 Chapter {chapter_index + 1}: {current_chapter}")
+    chapter_title = chapters[chapter_index]
+    st.subheader(f"📖 Chapter {chapter_index+1}: {chapter_title}")
 
-    # Show lesson content if not done
-    if not student["progress"]["lesson_done"]:
-        lesson_content = generate_lesson_content(subject, current_chapter, student_class)
+    # ✅ Lesson content
+    if not progress["lesson_done"]:
+        lesson_content = generate_lesson(subject, chapter_title, student_class)
         st.markdown(lesson_content)
-        if st.button("Mark Lesson as Completed"):
-            student["progress"]["lesson_done"] = True
+        if st.button("✅ Mark Lesson Completed"):
+            progress["lesson_done"] = True
             save_data(students)
             st.experimental_rerun()
 
-    # Quiz section
-    elif not student["progress"]["quiz_done"]:
+    # ✅ Quiz
+    elif not progress["quiz_done"]:
         st.markdown("### 🧠 Quiz Time!")
-        if "quiz_content" not in student:
-            quiz_text = generate_quiz(subject, current_chapter, student_class)
-            student["quiz_content"] = quiz_text
+        if "quiz" not in student:
+            quiz_text = generate_quiz(subject, chapter_title, student_class)
+            student["quiz"] = parse_quiz(quiz_text)
             save_data(students)
-        else:
-            quiz_text = student["quiz_content"]
 
-        questions = parse_quiz(quiz_text)
-
-        all_correct = True
+        quiz = student["quiz"]
         score = 0
-        for i, q in enumerate(questions):
+
+        for i, q in enumerate(quiz):
             st.markdown(f"**Q{i+1}: {q['question']}**")
-            user_answer = st.radio(
-                label=f"Select answer for Q{i+1}",
+            choice = st.radio(
+                label="Your Answer:",
                 options=["a", "b", "c"],
                 format_func=lambda x: f"{x}) {q['options'][x]}",
                 key=f"quiz_{i}"
             )
-            if user_answer:
-                if user_answer == q['answer']:
-                    st.success("✅ Correct!")
-                    score += 1
-                else:
-                    st.error(f"❌ Wrong! Correct answer is: {q['answer']}) {q['options'][q['answer']]}")
-                    all_correct = False
+            if choice == q["answer"]:
+                score += 1
 
         if st.button("Submit Quiz"):
-            student["progress"]["quiz_done"] = True
-            student["progress"]["quiz_score"] = score
+            st.success(f"✅ You scored {score} out of {len(quiz)}")
+            progress["quiz_done"] = True
+            student["score"] = score
             save_data(students)
-            st.success(f"Your score: {score} out of {len(questions)}")
             st.experimental_rerun()
 
-    # Move to next chapter option
+    # ✅ Next chapter
     else:
-        if st.button("Go to Next Chapter"):
-            student["progress"]["chapter_index"] += 1
-            student["progress"]["lesson_done"] = False
-            student["progress"]["quiz_done"] = False
-            student.pop("quiz_content", None)  # remove old quiz
+        if st.button("➡️ Next Chapter"):
+            progress["chapter_index"] += 1
+            progress["lesson_done"] = False
+            progress["quiz_done"] = False
+            student.pop("quiz", None)
             save_data(students)
             st.experimental_rerun()
