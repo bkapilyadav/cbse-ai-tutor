@@ -5,14 +5,9 @@ import re
 import json
 from openai import OpenAI
 
-# Initialize OpenAI client
 client = OpenAI()
 
 def clean_json_response(raw_text: str) -> str:
-    """
-    Extract the first JSON array from the raw_text using regex.
-    Handles cases where extra explanation text surrounds the JSON.
-    """
     match = re.search(r'\[\s*{.*?}\s*\]', raw_text, re.DOTALL)
     return match.group(0).strip() if match else raw_text.strip()
 
@@ -109,23 +104,33 @@ def main():
                 return
             st.session_state.current_chapter_idx = 0
             st.session_state.completed_chapters = set()
-            st.success("Student details saved! You can now explore chapters below.")
 
-    if "current_chapter_idx" not in st.session_state:
-        st.session_state.current_chapter_idx = 0
-    if "completed_chapters" not in st.session_state:
-        st.session_state.completed_chapters = set()
+            # Store previous subject/class to detect changes
+            st.session_state.previous_subject = st.session_state.student['subject']
+            st.session_state.previous_class = st.session_state.student['class']
+            st.session_state.chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
 
     if all(st.session_state.student.get(k) for k in ['name', 'id', 'class', 'subject']):
-        if "chapters" not in st.session_state:
-            chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
-            if chapters:
-                st.session_state.chapters = chapters
-            else:
-                st.warning("No chapters found for your selection.")
-                return
-        else:
-            chapters = st.session_state.chapters
+        # Refresh chapters if subject/class changed after initial form submission
+        if (
+            "previous_subject" not in st.session_state or
+            "previous_class" not in st.session_state or
+            st.session_state.previous_subject != st.session_state.student['subject'] or
+            st.session_state.previous_class != st.session_state.student['class']
+        ):
+            st.session_state.chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
+            st.session_state.previous_subject = st.session_state.student['subject']
+            st.session_state.previous_class = st.session_state.student['class']
+            st.session_state.current_chapter_idx = 0
+            st.session_state.completed_chapters = set()
+            for k in list(st.session_state.keys()):
+                if k.startswith("chapter_content_") or k.startswith("quiz_"):
+                    del st.session_state[k]
+
+        chapters = st.session_state.get("chapters", [])
+        if not chapters:
+            st.warning("No chapters found for your selection.")
+            return
 
         total_chapters = len(chapters)
         st.markdown(f"### Chapters for {st.session_state.student['subject']} - Class {st.session_state.student['class']}:")
