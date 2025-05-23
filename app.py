@@ -13,8 +13,8 @@ def clean_json_response(raw_text: str) -> str:
 
 def get_chapters(subject: str, student_class: str):
     prompt = (
-        f"List the chapters for {subject} for class {student_class} as a JSON array of objects,"
-        f" each object with keys 'chapter' and 'title', like:\n"
+        f"List the chapters for {subject} for class {student_class} as a JSON array of objects, "
+        f"each object with keys 'chapter' and 'title', like:\n"
         f"[{{\"chapter\": \"1\", \"title\": \"Chapter Title\"}}, ...]\n"
         f"Only return the JSON array, no extra text."
     )
@@ -38,8 +38,8 @@ def get_chapters(subject: str, student_class: str):
 
 def get_chapter_content(subject: str, student_class: str, chapter_number: str):
     prompt = (
-        f"Write a simple, engaging explanation of Chapter {chapter_number} of {subject} for class {student_class}."
-        f" Use easy language suitable for kids."
+        f"Write a simple, engaging explanation of Chapter {chapter_number} of {subject} for class {student_class}. "
+        f"Use easy language suitable for kids."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -52,14 +52,29 @@ def get_chapter_content(subject: str, student_class: str, chapter_number: str):
     )
     return response.choices[0].message.content.strip()
 
+def validate_quiz_questions(quiz, chapter_number, subject):
+    """
+    Validate if quiz questions relate to the chapter number or subject keywords.
+    Returns True if all questions seem relevant, else False.
+    """
+    chapter_str = str(chapter_number)
+    for q in quiz:
+        question_text = q.get("question", "").lower()
+        # Check if chapter number or subject keywords appear in question text
+        if chapter_str not in question_text and subject.lower() not in question_text:
+            # If question does not mention chapter number or subject, fail validation
+            return False
+    return True
+
 def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     prompt = (
         f"Generate 3 simple multiple choice questions (question + 3 options + correct answer) "
-        f"strictly based on the content of Chapter {chapter_number} of {subject} for class {student_class}."
-        f" Do NOT include any questions outside this chapter."
-        f" Return the questions as a JSON array of objects with keys: question, options (list), answer."
-        f" Make the questions kid-friendly and clear."
-        f" Only return the JSON array, no extra text."
+        f"STRICTLY based on the content of Chapter {chapter_number} of {subject} for class {student_class}. "
+        f"Do NOT include any questions outside this chapter. "
+        f"Each question must be directly relevant to Chapter {chapter_number} content. "
+        f"Return the questions as a JSON array of objects with keys: question, options (list), answer. "
+        f"Make the questions kid-friendly and clear. "
+        f"Only return the JSON array, no extra text."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -73,7 +88,12 @@ def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     raw_text = response.choices[0].message.content
     cleaned_text = clean_json_response(raw_text)
     try:
-        return json.loads(cleaned_text)
+        quiz = json.loads(cleaned_text)
+        # Validate quiz questions
+        if not validate_quiz_questions(quiz, chapter_number, subject):
+            st.error("Quiz questions validation failed: questions might not be strictly related to the chapter.")
+            return []
+        return quiz
     except Exception:
         st.error("Failed to parse quiz questions from API.")
         st.error(f"API response was:\n{raw_text}")
