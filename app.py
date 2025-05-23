@@ -3,14 +3,11 @@ import re
 import json
 from openai import OpenAI
 
-# Initialize OpenAI client (Make sure OPENAI_API_KEY is set in your environment)
+# Initialize OpenAI client
 client = OpenAI()
 
 def clean_json_response(raw_text: str) -> str:
-    """
-    Remove markdown-style triple backticks and optional 'json' tag from API response.
-    """
-    cleaned = re.sub(r"```(?:json)?\n?(.*?)```", r"\1", raw_text, flags=re.DOTALL).strip()
+    cleaned = re.sub(r"```(?:json)?\n(.*?)```", r"\1", raw_text, flags=re.DOTALL).strip()
     return cleaned
 
 def get_chapters(subject: str, student_class: str):
@@ -91,9 +88,8 @@ def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     return quiz
 
 def main():
-    st.title("📘 CBSE AI Tutor")
+    st.title("\ud83d\udcd8 CBSE AI Tutor")
 
-    # Input student details
     if "student" not in st.session_state:
         st.session_state.student = {}
 
@@ -101,40 +97,33 @@ def main():
         st.session_state.student['name'] = st.text_input("Enter your name", st.session_state.student.get('name', ''))
         st.session_state.student['id'] = st.text_input("Enter your ID", st.session_state.student.get('id', ''))
         st.session_state.student['class'] = st.text_input("Enter your class (e.g., 6)", st.session_state.student.get('class', ''))
-        
+
         subjects = [
             "Science", "Mathematics", "English", "Social Science",
             "Computer Science", "Hindi", "Sanskrit", "Environmental Studies"
         ]
-        default_subject = st.session_state.student.get('subject', "Science")
-        if default_subject not in subjects:
-            default_subject = "Science"
-        st.session_state.student['subject'] = st.selectbox("Select subject", subjects, index=subjects.index(default_subject))
-        
+        st.session_state.student['subject'] = st.selectbox("Select subject", subjects, index=subjects.index(st.session_state.student.get('subject', "Science")) if st.session_state.student.get('subject') in subjects else 0)
+
         submitted = st.form_submit_button("Submit")
         if submitted:
             if not all([st.session_state.student['name'], st.session_state.student['id'], st.session_state.student['class'], st.session_state.student['subject']]):
                 st.warning("Please fill all the details.")
                 return
-            # Reset chapter progress on new submission
             st.session_state.current_chapter_idx = 0
             st.session_state.completed_chapters = set()
-            # Clear previous chapters and content caches
-            st.session_state.pop("chapters", None)
-            for key in list(st.session_state.keys()):
-                if key.startswith("chapter_content_") or key.startswith("quiz_"):
-                    st.session_state.pop(key)
+            st.session_state.chapter_quizzes = {}
             st.success("Student details saved! You can now explore chapters below.")
 
     if "current_chapter_idx" not in st.session_state:
         st.session_state.current_chapter_idx = 0
     if "completed_chapters" not in st.session_state:
         st.session_state.completed_chapters = set()
+    if "chapter_quizzes" not in st.session_state:
+        st.session_state.chapter_quizzes = {}
 
     if all([st.session_state.student.get('name'), st.session_state.student.get('id'),
             st.session_state.student.get('class'), st.session_state.student.get('subject')]):
 
-        # Fetch chapters once and store in session state
         if "chapters" not in st.session_state:
             chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
             if chapters:
@@ -152,61 +141,55 @@ def main():
             chap_num = chap.get("chapter")
             chap_title = chap.get("title")
             if idx == st.session_state.current_chapter_idx:
-                st.markdown(f"**📖 Chapter {chap_num}: {chap_title}**")
+                st.markdown(f"**\ud83d\udcd6 Chapter {chap_num}: {chap_title}**")
             else:
                 if st.button(f"Go to Chapter {chap_num}: {chap_title}", key=f"chap_{idx}"):
                     st.session_state.current_chapter_idx = idx
 
         current_chap = chapters[st.session_state.current_chapter_idx]
-        st.markdown(f"## 📖 Chapter {current_chap['chapter']}: {current_chap['title']}")
+        st.markdown(f"## \ud83d\udcd6 Chapter {current_chap['chapter']}: {current_chap['title']}")
 
-        # Get chapter content
-        content_key = f"chapter_content_{st.session_state.current_chapter_idx}"
-        if content_key not in st.session_state:
+        if f"chapter_content_{st.session_state.current_chapter_idx}" not in st.session_state:
             content = get_chapter_content(
                 st.session_state.student['subject'],
                 st.session_state.student['class'],
                 current_chap['chapter']
             )
-            st.session_state[content_key] = content
+            st.session_state[f"chapter_content_{st.session_state.current_chapter_idx}"] = content
         else:
-            content = st.session_state[content_key]
+            content = st.session_state[f"chapter_content_{st.session_state.current_chapter_idx}"]
 
         st.markdown(content)
 
-        # Quiz section
-        quiz_key = f"quiz_{st.session_state.current_chapter_idx}"
-        if quiz_key not in st.session_state:
+        if st.session_state.current_chapter_idx not in st.session_state.chapter_quizzes:
             quiz = get_quiz_questions(
                 st.session_state.student['subject'],
                 st.session_state.student['class'],
                 current_chap['chapter']
             )
-            st.session_state[quiz_key] = quiz
+            st.session_state.chapter_quizzes[st.session_state.current_chapter_idx] = quiz
         else:
-            quiz = st.session_state[quiz_key]
+            quiz = st.session_state.chapter_quizzes[st.session_state.current_chapter_idx]
 
         if quiz:
-            st.markdown("### Quiz Time! 🎉")
+            st.markdown("### Quiz Time! \ud83c\udf89")
             for i, q in enumerate(quiz):
                 st.markdown(f"**Q{i+1}: {q['question']}**")
                 options = q['options']
                 user_answer = st.radio(f"Choose the correct answer for Q{i+1}:", options, key=f"quiz_{st.session_state.current_chapter_idx}_{i}")
                 if st.button(f"Check Answer for Q{i+1}", key=f"check_{st.session_state.current_chapter_idx}_{i}"):
                     if user_answer == q['answer']:
-                        st.success("Correct! 🎉")
+                        st.success("Correct! \ud83c\udf89")
                     else:
                         st.error(f"Incorrect. The correct answer is: {q['answer']}")
 
-        # Mark chapter completed button
         if current_chap['chapter'] not in st.session_state.completed_chapters:
-            if st.button("Mark Chapter Completed ✅"):
+            if st.button("Mark Chapter Completed \u2705"):
                 st.session_state.completed_chapters.add(current_chap['chapter'])
                 st.success(f"Chapter {current_chap['chapter']} marked as completed!")
 
-        # Next chapter button
         if st.session_state.current_chapter_idx < total_chapters - 1:
-            if st.button("Next Chapter ▶️"):
+            if st.button("Next Chapter \u25b6\ufe0f"):
                 st.session_state.current_chapter_idx += 1
         else:
             st.info("You have completed all chapters!")
