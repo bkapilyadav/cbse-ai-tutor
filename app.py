@@ -1,3 +1,4 @@
+# app.py
 # -*- coding: utf-8 -*-
 import streamlit as st
 import re
@@ -8,8 +9,12 @@ from openai import OpenAI
 client = OpenAI()
 
 def clean_json_response(raw_text: str) -> str:
-    cleaned = re.sub(r"```(?:json)?\n(.*?)```", r"\1", raw_text, flags=re.DOTALL).strip()
-    return cleaned
+    """
+    Extract the first JSON array from the raw_text using regex.
+    Handles cases where extra explanation text surrounds the JSON.
+    """
+    match = re.search(r'\[\s*{.*?}\s*\]', raw_text, re.DOTALL)
+    return match.group(0).strip() if match else raw_text.strip()
 
 def get_chapters(subject: str, student_class: str):
     prompt = (
