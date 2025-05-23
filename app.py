@@ -1,89 +1,182 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
-import openai
-import os
+import re
+import json
+from openai import OpenAI
 
-# Set your OpenAI API key securely
-openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else os.getenv("OPENAI_API_KEY")
+# Initialize OpenAI client
+client = OpenAI()
 
-st.set_page_config(page_title="CBSE AI Tutor", layout="centered")
+def clean_json_response(raw_text: str) -> str:
+    cleaned = re.sub(r"```(?:json)?\n(.*?)```", r"\1", raw_text, flags=re.DOTALL).strip()
+    return cleaned
 
-# System prompt for explanation
-EXPLANATION_PROMPT = """
-You are a helpful CBSE school tutor AI. Your task is to explain this chapter to a Grade 10 student in simple language.
-Use examples and clear concepts. Chapter:
-"{chapter_content}"
-"""
-
-# System prompt for quiz generation
-QUIZ_PROMPT = """
-You are an AI quiz generator for CBSE Grade 10. Create a 5-question multiple choice quiz from the following chapter.
-Each question should have 4 options (A, B, C, D) and mark the correct option. Chapter:
-"{chapter_content}"
-
-Format:
-Q1. ...
-A. ...
-B. ...
-C. ...
-D. ...
-Correct Answer: ...
-"""
-
-def get_openai_response(prompt: str) -> str:
+def get_chapters(subject: str, student_class: str):
+    prompt = (
+        f"List the chapters for {subject} for class {student_class} as a JSON array of objects,"
+        f" each object with keys 'chapter' and 'title', like:\n"
+        f"[{{\"chapter\": \"1\", \"title\": \"Chapter Title\"}}, ...]\n"
+        f"Only return the JSON array, no extra text."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an assistant that provides educational chapters."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+        max_tokens=500,
+    )
+    raw_text = response.choices[0].message.content
+    cleaned_text = clean_json_response(raw_text)
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "system", "content": prompt}],
-            temperature=0.7,
-            max_tokens=1000
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"❌ Error generating response: {e}"
+        return json.loads(cleaned_text)
+    except Exception:
+        st.error("Failed to parse chapters response from API.")
+        st.error(f"API response was:\n{raw_text}")
+        return []
 
-# Sample subject and chapters (mock structure)
-SUBJECTS = {
-    "Science": {
-        "Chapter 1 - Chemical Reactions": "Chemical reactions involve transformation of substances...",
-        "Chapter 2 - Acids, Bases and Salts": "Acids are sour and turn blue litmus red...",
-        "Chapter 3 - Metals and Non-Metals": "Metals are good conductors of heat and electricity...",
-    },
-    "Math": {
-        "Chapter 1 - Real Numbers": "Real numbers include both rational and irrational numbers...",
-        "Chapter 2 - Polynomials": "A polynomial is an algebraic expression with variables...",
-    },
-    "Social Science": {
-        "Chapter 1 - The Rise of Nationalism in Europe": "The French Revolution gave rise to nationalism...",
-        "Chapter 2 - Resources and Development": "Resources are materials available in our environment...",
-    }
-}
+def get_chapter_content(subject: str, student_class: str, chapter_number: str):
+    prompt = (
+        f"Write a simple, engaging explanation of Chapter {chapter_number} of {subject} for class {student_class}."
+        f" Use easy language suitable for kids."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a helpful teacher bot."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.7,
+        max_tokens=700,
+    )
+    return response.choices[0].message.content.strip()
 
-def display_explanation_and_quiz(chapter_text: str):
-    with st.spinner("Generating explanation..."):
-        explanation = get_openai_response(EXPLANATION_PROMPT.format(chapter_content=chapter_text))
-        st.subheader("📘 Explanation")
-        st.write(explanation)
-
-    with st.spinner("Generating quiz..."):
-        quiz = get_openai_response(QUIZ_PROMPT.format(chapter_content=chapter_text))
-        st.subheader("📝 Quiz")
-        st.markdown(quiz)
+def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
+    prompt = (
+        f"Generate 3 simple multiple choice questions (question + 3 options + correct answer) "
+        f"based on Chapter {chapter_number} of {subject} for class {student_class}."
+        f" Return as a JSON array of objects with keys: question, options (list), answer."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a quiz generator for kids."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.7,
+        max_tokens=700,
+    )
+    raw_text = response.choices[0].message.content
+    cleaned_text = clean_json_response(raw_text)
+    try:
+        return json.loads(cleaned_text)
+    except Exception:
+        st.error("Failed to parse quiz questions from API.")
+        st.error(f"API response was:\n{raw_text}")
+        return []
 
 def main():
-    st.title("CBSE AI Tutor")  # Changed title to avoid UnicodeEncodeError
+    st.title("📘 CBSE AI Tutor")
 
-    st.markdown("Welcome! Select a subject and chapter to get started with interactive learning. 📚")
+    if "student" not in st.session_state:
+        st.session_state.student = {}
 
-    subject = st.selectbox("Choose a subject:", list(SUBJECTS.keys()))
-    chapters = list(SUBJECTS[subject].keys())
-    selected_chapter = st.selectbox("Choose a chapter:", chapters)
+    with st.form("student_info_form"):
+        st.session_state.student['name'] = st.text_input("Enter your name", st.session_state.student.get('name', ''))
+        st.session_state.student['id'] = st.text_input("Enter your ID", st.session_state.student.get('id', ''))
+        st.session_state.student['class'] = st.text_input("Enter your class (e.g., 6)", st.session_state.student.get('class', ''))
 
-    if st.button("Generate Explanation + Quiz"):
-        chapter_text = SUBJECTS[subject][selected_chapter]
-        display_explanation_and_quiz(chapter_text)
+        subjects = [
+            "Science", "Mathematics", "English", "Social Science",
+            "Computer Science", "Hindi", "Sanskrit", "Environmental Studies"
+        ]
+        st.session_state.student['subject'] = st.selectbox(
+            "Select subject",
+            subjects,
+            index=subjects.index(st.session_state.student.get('subject', "Science")) if st.session_state.student.get('subject') in subjects else 0
+        )
 
-    st.markdown("---")
-    st.markdown("Built with ❤️ using Streamlit and OpenAI GPT")
+        submitted = st.form_submit_button("Submit")
+        if submitted:
+            if not all([st.session_state.student['name'], st.session_state.student['id'], st.session_state.student['class'], st.session_state.student['subject']]):
+                st.warning("Please fill all the details.")
+                return
+            st.session_state.current_chapter_idx = 0
+            st.session_state.completed_chapters = set()
+            st.success("Student details saved! You can now explore chapters below.")
+
+    if "current_chapter_idx" not in st.session_state:
+        st.session_state.current_chapter_idx = 0
+    if "completed_chapters" not in st.session_state:
+        st.session_state.completed_chapters = set()
+
+    if all(st.session_state.student.get(k) for k in ['name', 'id', 'class', 'subject']):
+        if "chapters" not in st.session_state:
+            chapters = get_chapters(st.session_state.student['subject'], st.session_state.student['class'])
+            if chapters:
+                st.session_state.chapters = chapters
+            else:
+                st.warning("No chapters found for your selection.")
+                return
+        else:
+            chapters = st.session_state.chapters
+
+        total_chapters = len(chapters)
+        st.markdown(f"### Chapters for {st.session_state.student['subject']} - Class {st.session_state.student['class']}:")
+
+        for idx, chap in enumerate(chapters):
+            chap_num = chap.get("chapter")
+            chap_title = chap.get("title")
+            if idx == st.session_state.current_chapter_idx:
+                st.markdown(f"**📖 Chapter {chap_num}: {chap_title}**")
+            else:
+                if st.button(f"Go to Chapter {chap_num}: {chap_title}", key=f"chap_{idx}"):
+                    st.session_state.current_chapter_idx = idx
+
+        current_chap = chapters[st.session_state.current_chapter_idx]
+        st.markdown(f"## 📖 Chapter {current_chap['chapter']}: {current_chap['title']}")
+
+        key_content = f"chapter_content_{st.session_state.current_chapter_idx}"
+        if key_content not in st.session_state:
+            st.session_state[key_content] = get_chapter_content(
+                st.session_state.student['subject'],
+                st.session_state.student['class'],
+                current_chap['chapter']
+            )
+        st.markdown(st.session_state[key_content])
+
+        key_quiz = f"quiz_{st.session_state.current_chapter_idx}"
+        if key_quiz not in st.session_state:
+            st.session_state[key_quiz] = get_quiz_questions(
+                st.session_state.student['subject'],
+                st.session_state.student['class'],
+                current_chap['chapter']
+            )
+        quiz = st.session_state[key_quiz]
+
+        if quiz:
+            st.markdown("### Quiz Time! 🎉")
+            for i, q in enumerate(quiz):
+                st.markdown(f"**Q{i+1}: {q['question']}**")
+                options = q['options']
+                user_answer = st.radio(f"Choose the correct answer for Q{i+1}:", options, key=f"quiz_{st.session_state.current_chapter_idx}_{i}")
+                if st.button(f"Check Answer for Q{i+1}", key=f"check_{st.session_state.current_chapter_idx}_{i}"):
+                    if user_answer == q['answer']:
+                        st.success("Correct! 🎉")
+                    else:
+                        st.error(f"Incorrect. The correct answer is: {q['answer']}")
+
+        if current_chap['chapter'] not in st.session_state.completed_chapters:
+            if st.button("Mark Chapter Completed ✅"):
+                st.session_state.completed_chapters.add(current_chap['chapter'])
+                st.success(f"Chapter {current_chap['chapter']} marked as completed!")
+
+        if st.session_state.current_chapter_idx < total_chapters - 1:
+            if st.button("Next Chapter ▶️"):
+                st.session_state.current_chapter_idx += 1
+        else:
+            st.info("You have completed all chapters!")
 
 if __name__ == "__main__":
     main()
