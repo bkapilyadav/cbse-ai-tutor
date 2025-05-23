@@ -52,21 +52,26 @@ def get_chapter_content(subject: str, student_class: str, chapter_number: str):
     )
     return response.choices[0].message.content.strip()
 
-def validate_quiz_questions(quiz, chapter_number, subject):
+def validate_quiz_questions(quiz, chapter_number, subject, chapter_title):
     """
-    Validate if quiz questions relate to the chapter number or subject keywords.
+    Validate if quiz questions relate to the chapter number, subject or chapter title keywords.
     Returns True if all questions seem relevant, else False.
     """
     chapter_str = str(chapter_number)
+    subject_lower = subject.lower()
+    chapter_title_words = set(chapter_title.lower().split())
+
     for q in quiz:
         question_text = q.get("question", "").lower()
-        # Check if chapter number or subject keywords appear in question text
-        if chapter_str not in question_text and subject.lower() not in question_text:
-            # If question does not mention chapter number or subject, fail validation
+        # Relaxed check: pass if question contains either chapter number, subject name, or words from chapter title
+        if (chapter_str not in question_text and
+            subject_lower not in question_text and
+            not any(word in question_text for word in chapter_title_words)):
+            # If question does not mention chapter number, subject, or chapter title keywords, fail validation
             return False
     return True
 
-def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
+def get_quiz_questions(subject: str, student_class: str, chapter_number: str, chapter_title: str):
     prompt = (
         f"Generate 3 simple multiple choice questions (question + 3 options + correct answer) "
         f"STRICTLY based on the content of Chapter {chapter_number} of {subject} for class {student_class}. "
@@ -89,8 +94,8 @@ def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     cleaned_text = clean_json_response(raw_text)
     try:
         quiz = json.loads(cleaned_text)
-        # Validate quiz questions
-        if not validate_quiz_questions(quiz, chapter_number, subject):
+        # Validate quiz questions using relaxed logic
+        if not validate_quiz_questions(quiz, chapter_number, subject, chapter_title):
             st.error("Quiz questions validation failed: questions might not be strictly related to the chapter.")
             return []
         return quiz
@@ -182,7 +187,8 @@ def main():
             st.session_state[key_quiz] = get_quiz_questions(
                 st.session_state.student['subject'],
                 st.session_state.student['class'],
-                current_chap['chapter']
+                current_chap['chapter'],
+                current_chap['title']
             )
         quiz = st.session_state[key_quiz]
 
