@@ -1,208 +1,188 @@
 import streamlit as st
 import openai
 
-# -------------- OpenAI API key setup --------------
-openai.api_key = st.secrets.get("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY"
+# Set your OpenAI API key in Streamlit secrets or environment variable
+openai.api_key = st.secrets.get("OPENAI_API_KEY")
 
-# -------------- Hardcoded syllabus for demo --------------
-SYLLABUS = {
-    "science": {
-        "6": [
-            {"chapter": 1, "title": "Food: Where Does It Come From?"},
-            {"chapter": 2, "title": "Components of Food"},
-            {"chapter": 3, "title": "Fibre to Fabric"},
-            {"chapter": 4, "title": "Sorting Materials into Groups"},
-            {"chapter": 5, "title": "Separation of Substances"},
-            {"chapter": 6, "title": "Changes Around Us"},
-            {"chapter": 7, "title": "Getting to Know Plants"},
-            {"chapter": 8, "title": "Body Movements"},
-            {"chapter": 9, "title": "The Living Organisms and Their Surroundings"},
-            {"chapter": 10, "title": "Motion and Measurement of Distances"},
-            {"chapter": 11, "title": "Light, Shadows and Reflections"},
-            {"chapter": 12, "title": "Electricity and Circuits"},
-            {"chapter": 13, "title": "Fun with Magnets"},
-            {"chapter": 14, "title": "Water"},
-            {"chapter": 15, "title": "Air Around Us"},
-            {"chapter": 16, "title": "Garbage In, Garbage Out"}
-        ]
-    }
-}
+# Initialize session state
+if "student" not in st.session_state:
+    st.session_state.student = {}
 
-# -------------- Helper Functions --------------
+if "current_chapter_index" not in st.session_state:
+    st.session_state.current_chapter_index = 0
 
-def generate_lesson(subject, class_num, chapter_title):
-    prompt = (
-        f"You are a friendly and knowledgeable CBSE tutor for Class {class_num} {subject.capitalize()}.\n"
-        f"Explain the chapter titled '{chapter_title}' in a simple and engaging way suitable for Class {class_num} students."
-    )
+if "chapters" not in st.session_state:
+    st.session_state.chapters = []
+
+def get_chapters(subject: str, student_class: str):
+    # Generate chapter list from OpenAI
+    prompt = f"""
+You are a helpful CBSE tutor assistant.
+Provide a numbered list of chapter titles for Class {student_class} {subject} subject as JSON array.
+Example:
+[
+  "Chapter 1: Food: Where Does It Come From?",
+  "Chapter 2: Components of Food",
+  "Chapter 3: Fibre to Fabric",
+  ...
+]
+Only provide JSON array.
+"""
     response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a helpful CBSE tutor."},
-            {"role": "user", "content": prompt}
-        ],
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5,
+        max_tokens=500,
+    )
+    text = response.choices[0].message.content.strip()
+    try:
+        chapters = st.experimental_json.loads(text)
+    except Exception:
+        # fallback to parsing as plain text list if json parsing fails
+        chapters = []
+        lines = text.strip().split("\n")
+        for line in lines:
+            line = line.strip()
+            if line:
+                chapters.append(line)
+    return chapters
+
+def get_chapter_content(chapter_title: str, subject: str, student_class: str):
+    prompt = f"""
+You are a friendly and engaging CBSE tutor assistant.
+Explain the following chapter in simple language suitable for Class {student_class} students learning {subject}:
+
+{chapter_title}
+
+Please provide a clear, readable explanation with examples.
+"""
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=800
+        max_tokens=1000,
     )
     return response.choices[0].message.content.strip()
 
-def generate_quiz(subject, class_num, chapter_title):
-    prompt = (
-        f"Create 3 multiple-choice questions for Class {class_num} {subject.capitalize()} chapter '{chapter_title}'.\n"
-        "Each question should have options A, B, and C, and specify the correct answer."
-    )
+def get_quiz_questions(chapter_title: str, subject: str, student_class: str):
+    prompt = f"""
+You are a CBSE tutor assistant.
+Generate 3 simple multiple-choice quiz questions for Class {student_class} students on the chapter "{chapter_title}" of {subject}.
+Provide output as a JSON list of objects with question, options (list), and correct_answer fields.
+
+Example:
+[
+  {{
+    "question": "What is ...?",
+    "options": ["A", "B", "C"],
+    "correct_answer": "B"
+  }},
+  ...
+]
+"""
     response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a helpful quiz generator."},
-            {"role": "user", "content": prompt}
-        ],
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=500
+        max_tokens=700,
     )
-    return response.choices[0].message.content.strip()
+    text = response.choices[0].message.content.strip()
+    try:
+        quiz = st.experimental_json.loads(text)
+    except Exception:
+        quiz = []
+    return quiz
 
-def parse_quiz(raw_quiz_text):
-    # Parse raw quiz text into structured format [{question, options, answer}, ...]
-    questions = []
-    lines = raw_quiz_text.split("\n")
-    q = {}
-    options_labels = ["A", "B", "C"]
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line[0].isdigit() and line[1] == '.':
-            if q:
-                questions.append(q)
-            q = {"question": line[3:].strip(), "options": {}, "answer": None}
-        elif any(line.startswith(label + ".") for label in options_labels):
-            label = line[0]
-            q["options"][label] = line[2:].strip()
-        elif line.lower().startswith("correct answer"):
-            q["answer"] = line.split(":")[-1].strip().upper()
-    if q:
-        questions.append(q)
-    return questions
+def main():
+    st.title("📘 CBSE AI Tutor")
 
-# -------------- Streamlit UI --------------
+    # Input form for student details
+    with st.form("student_info_form"):
+        name = st.text_input("Enter your name")
+        student_id = st.text_input("Enter your ID")
+        student_class = st.text_input("Enter your class (e.g., 6, 7, 8)")
+        subject = st.text_input("Enter the subject (e.g., Science, Mathematics, English)")
+        submitted = st.form_submit_button("Start Learning")
 
-st.set_page_config(page_title="CBSE AI Tutor", page_icon="📘")
+    if submitted:
+        if not (name and student_id and student_class and subject):
+            st.error("Please fill in all fields.")
+            return
+        # Save student data and reset progress
+        st.session_state.student = {
+            "name": name,
+            "id": student_id,
+            "class": student_class,
+            "subject": subject,
+            "completed_chapters": []
+        }
+        st.session_state.current_chapter_index = 0
+        st.session_state.chapters = get_chapters(subject, student_class)
+        st.experimental_rerun()
 
-st.title("📘 CBSE AI Tutor")
+    if st.session_state.get("student"):
 
-# --- Student Data Form ---
-with st.form("student_info"):
-    st.subheader("Enter Student Details")
-    student_id = st.text_input("Student ID (required)")
-    student_name = st.text_input("Student Name")
-    submitted = st.form_submit_button("Submit Student Info")
+        student = st.session_state.student
+        st.write(f"Welcome, **{student['name']}** (ID: {student['id']})")
+        st.write(f"Class: {student['class']}, Subject: {student['subject']}")
+        chapters = st.session_state.chapters
+        current_idx = st.session_state.current_chapter_index
 
-if submitted:
-    if not student_id.strip():
-        st.error("Student ID is required to continue.")
-    else:
-        st.session_state["student_id"] = student_id.strip()
-        st.session_state["student_name"] = student_name.strip()
-        st.success(f"Welcome, {student_name or 'Student'} (ID: {student_id})!")
+        if not chapters:
+            st.info("No chapters found for this subject and class.")
+            return
 
-# If student info not set, stop here
-if "student_id" not in st.session_state:
-    st.info("Please enter your student details to proceed.")
-    st.stop()
+        # Show all chapters with completion status
+        st.subheader(f"Chapters for {student['subject']} - Class {student['class']}:")
+        for idx, chap in enumerate(chapters):
+            completed = "✅" if idx in student.get("completed_chapters", []) else "❌"
+            st.write(f"{completed} {chap}")
 
-# --- Subject and Class selection ---
-with st.form("subject_class_form"):
-    st.subheader("Select Subject and Class")
-    subject_input = st.selectbox("Subject", options=list(SYLLABUS.keys()))
-    class_input = st.selectbox("Class", options=sorted(SYLLABUS[subject_input].keys()))
-    start_learning = st.form_submit_button("Start Learning")
+        # Display current chapter content
+        current_chapter = chapters[current_idx]
+        st.markdown(f"## 📖 {current_chapter}")
 
-if start_learning:
-    st.session_state.subject = subject_input
-    st.session_state.class_num = class_input
-    st.session_state.chapter_index = 0
-    st.session_state.completed_chapters = []
-    st.session_state.quiz_answers = {}
-    st.experimental_rerun()
+        # Fetch and show chapter explanation
+        content = get_chapter_content(current_chapter, student['subject'], student['class'])
+        st.write(content)
 
-# --- Learning Module ---
-if "subject" in st.session_state and "class_num" in st.session_state:
-    subject = st.session_state.subject
-    class_num = st.session_state.class_num
-    chapters = SYLLABUS[subject][class_num]
+        # Show quiz questions for current chapter
+        quiz = get_quiz_questions(current_chapter, student['subject'], student['class'])
+        if quiz:
+            st.markdown("### Quiz Time! 📝")
+            for i, q in enumerate(quiz):
+                st.write(f"**Q{i+1}: {q['question']}**")
+                options = q.get("options", [])
+                if options:
+                    selected = st.radio(f"Select answer for Q{i+1}", options, key=f"q{i+1}")
+                    # You can add feedback logic here if desired
+        else:
+            st.write("No quiz available for this chapter.")
 
-    st.markdown(f"### Syllabus: {subject.capitalize()} Class {class_num}")
-    for ch in chapters:
-        st.write(f"Chapter {ch['chapter']}: {ch['title']}")
-
-    idx = st.session_state.get("chapter_index", 0)
-    current_chapter = chapters[idx]
-
-    st.markdown("---")
-    st.header(f"Chapter {current_chapter['chapter']}: {current_chapter['title']}")
-
-    # Generate and display lesson content (cache to avoid repeated calls)
-    lesson_key = f"lesson_{idx}"
-    if lesson_key not in st.session_state:
-        with st.spinner("Generating lesson content..."):
-            lesson = generate_lesson(subject, class_num, current_chapter["title"])
-            st.session_state[lesson_key] = lesson
-    else:
-        lesson = st.session_state[lesson_key]
-    st.markdown(lesson)
-
-    # Generate and display quiz questions
-    quiz_key = f"quiz_{idx}"
-    if quiz_key not in st.session_state:
-        with st.spinner("Generating quiz questions..."):
-            raw_quiz = generate_quiz(subject, class_num, current_chapter["title"])
-            questions = parse_quiz(raw_quiz)
-            st.session_state[quiz_key] = questions
-            st.session_state["quiz_answers"][idx] = [None] * len(questions)
-    else:
-        questions = st.session_state[quiz_key]
-
-    st.subheader("Quiz Time! 📝")
-
-    answers = st.session_state["quiz_answers"].get(idx, [None]*len(questions))
-
-    for i, q in enumerate(questions):
-        st.write(f"**Q{i+1}: {q['question']}**")
-        selected = st.radio(
-            label=f"Select answer for question {i+1}",
-            options=list(q["options"].keys()),
-            format_func=lambda x, opts=q["options"]: f"{x}. {opts[x]}",
-            key=f"quiz_{idx}_q{i}"
-        )
-        answers[i] = selected
-
-    st.session_state["quiz_answers"][idx] = answers
-
-    # Buttons to navigate chapters and mark complete
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("Mark Chapter Completed"):
-            if None in answers:
-                st.warning("Please answer all questions before marking chapter as completed.")
-            else:
-                completed = st.session_state.get("completed_chapters", [])
-                if idx not in completed:
-                    completed.append(idx)
-                st.session_state.completed_chapters = completed
-                st.success(f"Chapter {current_chapter['chapter']} marked as completed.")
-
-    with col2:
-        if st.button("Next Chapter"):
-            if idx + 1 < len(chapters):
-                st.session_state.chapter_index = idx + 1
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("Mark Chapter Completed"):
+                if current_idx not in student["completed_chapters"]:
+                    student["completed_chapters"].append(current_idx)
+                st.success(f"Marked '{current_chapter}' as completed!")
+                st.session_state.student = student
                 st.experimental_rerun()
-            else:
-                st.info("You have reached the last chapter!")
 
-# --- Show Progress ---
-if "completed_chapters" in st.session_state:
-    st.markdown("---")
-    st.write(f"Chapters Completed: {len(st.session_state.completed_chapters)}/{len(SYLLABUS.get(st.session_state.subject, {}).get(st.session_state.class_num, []))}")
+        with col2:
+            if st.button("Next Chapter"):
+                if current_idx + 1 < len(chapters):
+                    st.session_state.current_chapter_index += 1
+                    st.experimental_rerun()
+                else:
+                    st.info("You have reached the last chapter.")
 
+        with col3:
+            if st.button("Previous Chapter"):
+                if current_idx > 0:
+                    st.session_state.current_chapter_index -= 1
+                    st.experimental_rerun()
+                else:
+                    st.info("This is the first chapter.")
+
+if __name__ == "__main__":
+    main()
