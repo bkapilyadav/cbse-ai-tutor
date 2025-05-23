@@ -55,8 +55,11 @@ def get_chapter_content(subject: str, student_class: str, chapter_number: str):
 def get_quiz_questions(subject: str, student_class: str, chapter_number: str):
     prompt = (
         f"Generate 3 simple multiple choice questions (question + 3 options + correct answer) "
-        f"based on Chapter {chapter_number} of {subject} for class {student_class}."
-        f" Return as a JSON array of objects with keys: question, options (list), answer."
+        f"strictly based on the content of Chapter {chapter_number} of {subject} for class {student_class}."
+        f" Do NOT include any questions outside this chapter."
+        f" Return the questions as a JSON array of objects with keys: question, options (list), answer."
+        f" Make the questions kid-friendly and clear."
+        f" Only return the JSON array, no extra text."
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
